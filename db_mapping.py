@@ -181,6 +181,7 @@ def save_to_excel(data, filename="facebook_posts.xlsx"):
 
     # Group by 'text'
     grouped = df.groupby('text', as_index=False).agg({
+        'name' : 'first',
         'text': 'first',
         'link': lambda links: next((ln for ln in links if ln), ''),  # first non-empty link
         'date': 'first',  # Keep first date
@@ -192,7 +193,7 @@ def save_to_excel(data, filename="facebook_posts.xlsx"):
     grouped.sort_values(by='keyword', inplace=True)
 
     # Reorder columns to put text and link first
-    column_order = ['text', 'link', 'date', 'images', 'videos', 'keyword']
+    column_order = ['name','text', 'link', 'date', 'images', 'videos', 'keyword']
     grouped = grouped[column_order]
 
     try:
