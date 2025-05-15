@@ -204,8 +204,13 @@ class FacebookScraper:
             search_box = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//input[@type='search' and contains(@aria-label, 'Tìm kiếm')]"))
             )
-            search_box.send_keys(Keys.CONTROL + "a")
-            search_box.send_keys(Keys.DELETE)
+            search_box.click()
+            search_box.send_keys(Keys.END)
+            for _ in range(50): 
+                search_box.send_keys(Keys.BACKSPACE)
+            self.driver.execute_script("arguments[0].value = '';", search_box)
+            self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", search_box)
+
             search_box.send_keys(keyword)
             current_url = self.driver.current_url
             search_box.send_keys(Keys.RETURN)
@@ -222,19 +227,18 @@ class FacebookScraper:
             return []
 
         # Begin collecting posts
-        count=0
-        url_checked = [] # anh này dùng để lưu những url đã crawl rồi
+        url_crawled = [] #list of crawled url
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         scroll_attempts = 0
         timeout = time.time() + max_posts * 5
         whitelist_entries = self.load_white_list() if self.white_list else []
         
-        while count < max_posts and scroll_attempts < 5:
+        while len(url_crawled) < max_posts and scroll_attempts < 5:
             # Find post elements
             elements = self.driver.find_elements(By.CSS_SELECTOR, "div.x1yztbdb.x1n2onr6.xh8yej3.x1ja2u2z")
 
             for elem in elements:
-                if count >= max_posts:
+                if len(url_crawled) >= max_posts:
                     break
 
                 # Try to expand truncated posts
@@ -250,8 +254,6 @@ class FacebookScraper:
                 try:
                     story_elem = elem.find_element(By.XPATH, ".//div[@data-ad-rendering-role='story_message']")
                     text = story_elem.text.strip()
-                    if not text:
-                        continue
                     self.logger.info("Post found!")
 
                     # Extract images
@@ -267,6 +269,7 @@ class FacebookScraper:
                     link = None
                     post_date = None
                     date_tooltip = None # date tooltip element
+                    poster_name = None #name
                     try:
                         span_elem = elem.find_element(By.CSS_SELECTOR, "span.html-span.xdj266r.x11i5rnm.xat24cr.x1mh8g0r.xexx8yu.x4uap5.x18d9i69.xkhd6sd.x1hl2dhg.x16tdsg8.x1vvkbs.x4k7w5x.x1h91t0o.x1h9r5lt.x1jfb8zj.xv2umb2.x1beo9mf.xaigb6o.x12ejxvf.x3igimt.xarpa2k.xedcshv.x1lytzrv.x1t2pt76.x7ja8zs.x1qrby5j")
                         
@@ -300,6 +303,12 @@ class FacebookScraper:
                         WebDriverWait(self.driver, 15).until(lambda d: d.execute_script("return document.readyState") == "complete")
                         link = self.driver.current_url
 
+                        #extract name
+                        try:
+                            poster_name = elem.find_element(By.CSS_SELECTOR,"span.x193iq5w.xeuugli.x13faqbe.x1vvkbs.xlh3980.xvmahel.x1n0sxbx.x1nxh6w3.x1sibtaa.x1s688f.xi81zsa").text
+                        except:
+                            poster_name = elem.find_element(By.CSS_SELECTOR,"span.html-span.xdj266r.x11i5rnm.xat24cr.x1mh8g0r.xexx8yu.x4uap5.x18d9i69.xkhd6sd.x1hl2dhg.x16tdsg8.x1vvkbs").text
+
                         # Close current post
                         self.driver.back()
                         WebDriverWait(self.driver, 10).until(lambda d: d.current_url == old_url)
@@ -314,11 +323,15 @@ class FacebookScraper:
                                 self.logger.info(f"Skipping post from whitelisted source: {link}")
                                 skip_post = True
                                 break
-                    if skip_post or link in url_checked: #thêm điều kiện check url_checked
+                    if skip_post:
                         continue
-                    #thay vì save to posts ta sẽ yield 
-                    count+=1
-                    yield({"text": text, "link": link, "date": post_date, "images": images, "videos": videos, "keyword": keyword})
+                    
+                    if link in url_crawled:
+                        self.logger.info(f"Skipping crawled post: {link}")
+                        continue
+                    
+                    url_crawled.append(link)
+                    yield ({"name": poster_name,"text": text, "link": link, "date": post_date, "images": images, "videos": videos, "keyword": keyword})
                 except Exception as e:
                     self.logger.debug(f"Could not extract post content: {str(e)}")
 
@@ -347,8 +360,7 @@ class FacebookScraper:
 
             last_height = new_height
 
-        self.logger.info(f"Scraped {count} posts for keyword '{keyword}'")
-
+        self.logger.info(f"Scraped {len(url_crawled)} posts for keyword '{keyword}'")
     def close(self):
         """
         Closes the browser and quits the WebDriver session.
@@ -368,13 +380,13 @@ def main():
     Main function that runs the Facebook scraper.
     """
     # Configuration
-    headless = True  # Run without showing browser window if True
+    headless = False  # Run without showing browser window if True
     proxy = None     # No proxy by default
     cookies_file = "facebook_cookies.json"  # Cookies file path
     white_list = "white_list.txt"
     user_data_dir = None  # Use default Chrome user data directory
     profile_name = None   # Use the specified Chrome profile
-    max_posts = 10        # Number of posts to scrape per keyword
+    max_posts = 15        # Number of posts to scrape per keyword
     
     # Initialize scraper
     scraper = FacebookScraper(
@@ -391,36 +403,42 @@ def main():
         if not scraper.login():
             logging.error("Login failed. Exiting.")
             return
-        
-
-
+            
         # Load keywords from file
         with open('keywords.txt', 'r', encoding='utf-8') as file:
             keywords = [line.strip() for line in file if line.strip()]
-
+            
         # Scrape posts for each keyword
         batch = []
-        batch_size = 10
-
+        batch_size = 5
         for keyword in keywords:
             posts = scraper.scrape_posts(keyword, max_posts)
             for post in posts:
                 batch.append(post)
-                if len(batch) >= batch_size:
-                    save_to_excel(list(batch))
-                    #save_to_database(session,batch)
-                    batch = []  #reset batch
+                if(len(batch)>= batch_size):
+                    save_to_excel(batch)
+                    batch =[]
+            #sau khi save vẫn dư ra 1 phần
+            if batch:
+                save_to_excel(batch)
+                batch =[]
             else:
-                logging.info(f"No posts found for keyword: {keyword}")
+                logging.info(f"No posts found for keyword: {keyword}")        
+        # Save to database
+        # connection_string = (
+        #     "mssql+pyodbc://"
+        #     "sa:123456@" #login:password
+        #     "Tan-PC/"  # Replace with your server name
+        #     "crawl"    # Your database name
+        #     "?driver=ODBC+Driver+18+for+SQL+Server"
+        #     "&TrustServerCertificate=yes"
+        #     "&charset=UTF8"
+        #     "&encoding=utf8"
+        # )
+        # save_to_database(all_posts, connection_string)
         
-        #phần dư 
-        if batch:
-            save_to_excel(batch)
-            #save_to_database(session,batch)
-
     finally:
         # Always close the browser
-        #close_database(engine,session)
         scraper.close()
 
 

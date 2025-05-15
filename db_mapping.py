@@ -98,46 +98,44 @@ class FacebookPost(Base):
     keyword = Column(String(255).with_variant(NVARCHAR(255), 'mssql'))
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
-def open_database(connection_string):
-    """
-    Open Database
-
-    Args:
-        connection_string: SQL Server connection string
-    """
-    engine = create_engine(connection_string)
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    return engine, session
-    
-
-def save_to_database(session, data):
+def save_to_database(data, connection_string):
     """
     Saves scraped Facebook posts to SQL Server database.
     
     Args:
-        session: session of SQL Server
+        data: List of post dictionaries
         connection_string: SQL Server connection string
     """
-    # Clean and prepare data
-    cleaned_data = []
-    for post in data:
-        # Clean text before storing in database
-        cleaned_text = clean_text(post.get('text', ''))
+    engine = None
+    try:
+        # Create database engine
+        engine = create_engine(connection_string)
+        
+        # Create tables if they don't exist
+        Base.metadata.create_all(engine)
+        
+        # Create session factory
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        # Clean and prepare data
+        cleaned_data = []
+        for post in data:
+            # Clean text before storing in database
+            cleaned_text = clean_text(post.get('text', ''))
             
-        cleaned_post = FacebookPost(
-            text=cleaned_text,
-            link=post.get('link', ''),
-            date=post.get('date', ''),
-            images=post.get('images', []),
-            videos=post.get('videos', []),
-            keyword=post.get('keyword', '')
-        )
-        cleaned_data.append(cleaned_post)
+            cleaned_post = FacebookPost(
+                text=cleaned_text,
+                link=post.get('link', ''),
+                date=post.get('date', ''),
+                images=post.get('images', []),
+                videos=post.get('videos', []),
+                keyword=post.get('keyword', '')
+            )
+            cleaned_data.append(cleaned_post)
 
         try:
+            # Add all posts to session
             session.bulk_save_objects(cleaned_data)
             # Commit the transaction
             session.commit()
@@ -147,14 +145,17 @@ def save_to_database(session, data):
             session.rollback()
             logging.error(f"Failed to save posts to database: {str(e)}")
             raise
-def close_database(engine, session):
-    """
-    close Database
-    """
-    if session:
-        session.close()
-    if engine:
-        engine.dispose()
+        
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logging.error(f"Database connection error: {str(e)}")
+        raise
+    
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 # Example connection string
 # CONNECTION_STRING = "mssql+pyodbc://username:password@server/database?driver=ODBC+Driver+17+for+SQL+Server"
@@ -172,11 +173,13 @@ def save_to_excel(data, filename="facebook_posts.xlsx"):
         cleaned_post = {}
         for key, value in post.items():
             if key == 'text':
+                # Assuming clean_text is defined in this file
                 cleaned_post[key] = clean_text(value)
             else:
                 cleaned_post[key] = value
         cleaned_data.append(cleaned_post)
 
+    # Convert to a DataFrame
     df = pd.DataFrame(cleaned_data).fillna('')
 
     # Group by 'text'
@@ -197,7 +200,7 @@ def save_to_excel(data, filename="facebook_posts.xlsx"):
     grouped = grouped[column_order]
 
     try:
-        #If file exists
+        #if file existed
         if os.path.exists(filename):
             book = load_workbook(filename)
             start_row = book["Posts"].max_row
@@ -211,7 +214,7 @@ def save_to_excel(data, filename="facebook_posts.xlsx"):
                 worksheet = writer.sheets["Posts"]
                 for row in worksheet.iter_rows():
                     for cell in row:
-                        cell.number_format = '@'
+                        cell.number_format = '@'        
     except Exception as e:
         logging.error(f"Failed to save data to Excel: {e}")
         return
